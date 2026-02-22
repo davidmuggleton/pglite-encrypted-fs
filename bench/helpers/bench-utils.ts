@@ -12,7 +12,6 @@ export interface BenchPair {
   encDb: PGlite
   plainDir: string
   encDir: string
-  encSalt: Buffer
   cleanup: () => Promise<void>
 }
 
@@ -32,7 +31,7 @@ export async function createBenchPair(
     ...(extensions ? { extensions } : {}),
   })
 
-  const { db: encDb, salt: encSalt } = await createEncryptedPGlite(
+  const { db: encDb } = await createEncryptedPGlite(
     encDir,
     'bench-passphrase',
     extensions,
@@ -50,7 +49,7 @@ export async function createBenchPair(
     cleanupTestDir(encDir)
   }
 
-  return { plainDb, encDb, plainDir, encDir, encSalt, cleanup }
+  return { plainDb, encDb, plainDir, encDir, cleanup }
 }
 
 /**

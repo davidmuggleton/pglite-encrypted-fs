@@ -4,16 +4,24 @@
 [![CI](https://github.com/davidmuggleton/pglite-encrypted-fs/actions/workflows/ci.yml/badge.svg)](https://github.com/davidmuggleton/pglite-encrypted-fs/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-Transparent AES-256-GCM page-level encryption for PGlite PostgreSQL databases.
+An encrypted virtual filesystem for [PGlite](https://pglite.dev/). Provides transparent AES-256-GCM page-level encryption so your PGlite database files are encrypted at rest.
+
+> **Status:** Alpha. The on-disk format is not yet versioned and may change before 1.0.
+
+## Why this exists
+
+[PGlite](https://pglite.dev/) gives you a full embedded PostgreSQL in Node.js -- SQL, indexes, transactions, extensions like pgvector, all without a server. But out of the box, database files sit **plaintext on disk**.
+
+This package is an encrypted VFS that plugs into PGlite's filesystem layer, encrypting every page as it's written and decrypting as it's read. Your PGlite code stays the same -- you just pass an `EncryptedFS` instance at creation.
 
 ## Features
 
 - **AES-256-GCM authenticated encryption** -- page-level encryption with integrity verification on every read
-- **PBKDF2-SHA512 key derivation** -- 256K iterations, compliant with OWASP recommendations
+- **PBKDF2-SHA512 key derivation** -- 256K iterations, aligned with [OWASP Password Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html) guidance
 - **Near-zero read overhead** -- decrypted pages are cached in PostgreSQL's buffer pool; subsequent reads hit the cache
 - **AAD binding prevents page swapping/replay attacks** -- each page is bound to its file identity and position
 - **Passphrase verification on reopen** -- a wrong key is detected immediately, before any data is served
-- **Works with PGlite extensions** -- pgvector, and any other extension supported by PGlite
+- **Transparent to PGlite extensions** -- pgvector and other extensions work normally on top of the encrypted VFS
 
 ## Install
 
@@ -34,59 +42,71 @@ yarn add pglite-encrypted-fs @electric-sql/pglite
 
 ```typescript
 import { PGlite } from '@electric-sql/pglite'
-import { EncryptedFS, deriveKeys, randomSalt } from 'pglite-encrypted-fs'
+import { EncryptedFS } from 'pglite-encrypted-fs'
 
 const dataDir = './my-encrypted-db'
-const passphrase = 'my-secret-passphrase'
-
-// First time: generate a new salt and derive keys
-const salt = randomSalt()
-const keys = deriveKeys(passphrase, salt)
-
-// Create the encrypted filesystem and pass it to PGlite
-const fs = new EncryptedFS(dataDir, keys, salt)
+const fs = new EncryptedFS(dataDir, 'my-secret-passphrase')
 const db = await PGlite.create({ dataDir, fs })
 
-// Use it like a normal PGlite database
 await db.exec('CREATE TABLE users (id SERIAL PRIMARY KEY, name TEXT)')
 await db.exec("INSERT INTO users (name) VALUES ('Alice')")
 const result = await db.query('SELECT * FROM users')
 console.log(result.rows) // [{ id: 1, name: 'Alice' }]
 
 await db.close()
-
-// IMPORTANT: Store the salt alongside your database path.
-// You'll need it to reopen the database later.
 ```
 
 ## Reopening an Existing Database
 
-The salt is required to reopen a database. Store it alongside your database path -- for example, in a config file or as a hex-encoded string in your application's settings.
+Use the same passphrase -- the salt is stored automatically.
 
 ```typescript
-// To reopen, use the same salt and passphrase
-const keys = deriveKeys(passphrase, savedSalt)
-const fs = new EncryptedFS(dataDir, keys, savedSalt)
+const fs = new EncryptedFS(dataDir, 'my-secret-passphrase')
 const db = await PGlite.create({ dataDir, fs })
 // Your data is still there, decrypted transparently
 ```
 
-If the passphrase is wrong, the `EncryptedFS` constructor throws immediately with `"Invalid passphrase or corrupted encryption keys"`.
+If the passphrase is wrong, the constructor throws immediately with `"Invalid passphrase or corrupted encryption keys"`.
+
+## pgvector Example
+
+PGlite extensions work normally on top of the encrypted VFS. Here's pgvector:
+
+```typescript
+import { PGlite } from '@electric-sql/pglite'
+import { vector } from '@electric-sql/pglite/vector'
+import { EncryptedFS } from 'pglite-encrypted-fs'
+
+const dataDir = './my-encrypted-vectors'
+const fs = new EncryptedFS(dataDir, process.env.DB_PASSPHRASE!)
+const db = await PGlite.create({ dataDir, fs, extensions: { vector } })
+
+await db.exec('CREATE EXTENSION IF NOT EXISTS vector')
+await db.exec('CREATE TABLE docs (id serial PRIMARY KEY, embedding vector(3))')
+await db.exec("INSERT INTO docs (embedding) VALUES ('[0.1, 0.2, 0.3]')")
+
+const { rows } = await db.query(
+  "SELECT * FROM docs ORDER BY embedding <-> '[0.1, 0.2, 0.3]' LIMIT 5"
+)
+console.log(rows)
+
+await db.close()
+fs.destroy()
+```
 
 ## API Reference
 
-### `EncryptedFS(dataDir, keys, salt, options?)`
+### `new EncryptedFS(dataDir, passphrase, options?)`
 
 Creates an encrypted filesystem instance.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `dataDir` | `string` | Path to the database directory on disk |
-| `keys` | `DerivedKeys` | Encryption keys returned by `deriveKeys()` |
-| `salt` | `Buffer` | The 16-byte salt used during key derivation |
+| `passphrase` | `string` | Your encryption passphrase |
 | `options` | `{ debug?: boolean }` | Optional. Enable debug logging with `{ debug: true }` |
 
-The constructor creates the data directory if it does not exist, and verifies the passphrase against an existing database (or creates the verification token for a new one).
+The constructor creates the data directory if it does not exist. On first use, it generates a random salt and creates a verification token. On subsequent opens, it reads the salt from the existing verification token and verifies the passphrase is correct.
 
 ### `deriveKeys(passphrase, salt)`
 
@@ -158,7 +178,7 @@ Each file receives a random 32-byte identifier stored in its header. Because fil
 
 ### Passphrase Verification
 
-On first initialization, a `.encryption-verify` file is created containing a known magic value encrypted with the derived key. On every subsequent open, this file is decrypted and checked. A wrong passphrase fails immediately rather than silently serving corrupted data.
+On first initialization, a `.encryption-verify` file is created containing the 16-byte salt followed by a known magic value encrypted with the derived key. On every subsequent open, the salt is read from this file, the key is re-derived, and the magic value is decrypted and checked. A wrong passphrase fails immediately rather than silently serving corrupted data.
 
 ### Unencrypted Files
 
@@ -171,6 +191,17 @@ The following PostgreSQL metadata files are left unencrypted because they contai
 - `postmaster.*`
 - `.lock` files
 - `replorigin_checkpoint`
+
+## Threat Model
+
+This provides **at-rest encryption** of PGlite/PostgreSQL database files on disk. It protects against offline theft or unauthorized access to the stored files.
+
+**Non-goals:**
+
+- Does not protect against an attacker who can run code in your process
+- Data is decrypted in memory during query execution (like any database encryption-at-rest)
+- JavaScript runtimes cannot guarantee secure key erasure (`destroy()` is best-effort)
+- This package has not been independently audited. If you find a vulnerability, please report it privately via GitHub.
 
 ## Performance
 
@@ -190,7 +221,7 @@ Benchmarks measured on Node.js (see `pnpm run bench` for your own results):
 | Single page decrypt | -- | 3.9us | -- |
 | Key derivation (PBKDF2) | -- | 48ms | -- |
 
-Read operations have near-zero overhead because data is decrypted when pages are loaded into PostgreSQL's buffer pool. Subsequent reads hit the cache. Write overhead comes from per-page encryption. Run benchmarks yourself with `pnpm run bench`.
+Read operations have near-zero overhead because data is decrypted when pages are loaded into PostgreSQL's buffer pool. Subsequent reads hit the cache, so reads are only slow the first time a page is loaded. Write overhead comes from per-page encryption. Run benchmarks yourself with `pnpm run bench`.
 
 ## Platform Support
 
@@ -204,6 +235,20 @@ Read operations have near-zero overhead because data is decrypted when pages are
 | Firefox | No |
 
 This package uses Node.js `crypto` and `fs` modules and is not compatible with browser environments.
+
+## FAQ
+
+**Can I rotate the passphrase?**
+
+Not in-place. Export your data with `pg_dump` (or application-level export), create a new encrypted database with the new passphrase, and re-import.
+
+**Can I migrate an existing plaintext PGlite database?**
+
+Same approach -- dump and re-import into a new encrypted database.
+
+**Why not SQLCipher?**
+
+SQLCipher encrypts **SQLite** databases. This package encrypts **PGlite/PostgreSQL** databases. If you're already using PGlite for its PostgreSQL features (extensions, SQL semantics, pgvector), this adds at-rest encryption without changing databases.
 
 ## Contributing
 

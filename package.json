@@ -1,6 +1,6 @@
 {
   "name": "pglite-encrypted-fs",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Encrypted filesystem for PGlite — AES-256-GCM page-level encryption for PostgreSQL databases",
   "type": "module",
   "main": "./dist/index.js",

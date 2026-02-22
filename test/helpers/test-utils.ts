@@ -1,7 +1,7 @@
 import {
   EncryptedFS,
   deriveKeys,
-  randomSalt,
+  SALT_SIZE,
   type DerivedKeys,
 } from '../../src/index.js'
 import { PGlite } from '@electric-sql/pglite'
@@ -30,9 +30,11 @@ export function createEncryptedFS(
   dataDir: string,
   passphrase = 'test-passphrase',
 ): { fs: EncryptedFS; salt: Buffer; keys: DerivedKeys } {
-  const salt = randomSalt()
+  const encFs = new EncryptedFS(dataDir, passphrase)
+  const tokenPath = path.join(dataDir, '.encryption-verify')
+  const salt = Buffer.from(fs.readFileSync(tokenPath).subarray(0, SALT_SIZE))
   const keys = deriveKeys(passphrase, salt)
-  return { fs: new EncryptedFS(dataDir, keys, salt), salt, keys }
+  return { fs: encFs, salt, keys }
 }
 
 /**
@@ -40,11 +42,36 @@ export function createEncryptedFS(
  */
 export function createEncryptedFSWithSalt(
   dataDir: string,
-  salt: Buffer,
+  _salt: Buffer,
   passphrase = 'test-passphrase',
 ): { fs: EncryptedFS; keys: DerivedKeys } {
+  const encFs = new EncryptedFS(dataDir, passphrase)
+  const tokenPath = path.join(dataDir, '.encryption-verify')
+  const salt = Buffer.from(fs.readFileSync(tokenPath).subarray(0, SALT_SIZE))
   const keys = deriveKeys(passphrase, salt)
-  return { fs: new EncryptedFS(dataDir, keys, salt), keys }
+  return { fs: encFs, keys }
+}
+
+/**
+ * Create an EncryptedFS with passphrase only (no manual salt)
+ */
+export function createPassphraseFS(
+  dataDir: string,
+  passphrase = 'test-passphrase',
+): EncryptedFS {
+  return new EncryptedFS(dataDir, passphrase)
+}
+
+/**
+ * Create an encrypted PGlite with passphrase only (no manual salt)
+ */
+export async function createPassphrasePGlite(
+  dataDir: string,
+  passphrase = 'test-passphrase',
+  extensions?: Record<string, unknown>,
+): Promise<PGlite> {
+  const encFs = new EncryptedFS(dataDir, passphrase)
+  return PGlite.create({ dataDir, fs: encFs, extensions })
 }
 
 /**
@@ -65,15 +92,14 @@ export async function createEncryptedPGlite(
  */
 export async function reopenEncryptedPGlite(
   dataDir: string,
-  salt: Buffer,
+  _salt: Buffer,
   passphrase = 'test-passphrase',
   extensions?: Record<string, unknown>,
 ): Promise<{ db: PGlite; keys: DerivedKeys }> {
-  const { fs: encFs, keys } = createEncryptedFSWithSalt(
-    dataDir,
-    salt,
-    passphrase,
-  )
+  const encFs = new EncryptedFS(dataDir, passphrase)
+  const tokenPath = path.join(dataDir, '.encryption-verify')
+  const salt = Buffer.from(fs.readFileSync(tokenPath).subarray(0, SALT_SIZE))
+  const keys = deriveKeys(passphrase, salt)
   const db = await PGlite.create({ dataDir, fs: encFs, extensions })
   return { db, keys }
 }

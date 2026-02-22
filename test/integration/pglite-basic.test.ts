@@ -3,10 +3,12 @@ import {
   createTestDir,
   cleanupTestDir,
   createEncryptedPGlite,
+  createPassphrasePGlite,
   reopenEncryptedPGlite,
   verifyFileEncrypted,
   findFiles,
 } from '../helpers/test-utils.js'
+import { EncryptedFS } from '../../src/index.js'
 
 describe('PGlite Basic Integration', () => {
   let testDir: string
@@ -478,6 +480,46 @@ describe('PGlite Basic Integration', () => {
       }
 
       expect(foundPlaintext).toBe(false)
+    })
+  })
+
+  describe('passphrase-only API', () => {
+    it('creates and queries with passphrase only', async () => {
+      const db = await createPassphrasePGlite(testDir)
+
+      await db.exec('CREATE TABLE simple (id SERIAL PRIMARY KEY, name TEXT)')
+      await db.exec("INSERT INTO simple (name) VALUES ('passphrase-test')")
+
+      const result = await db.query('SELECT * FROM simple')
+      expect(result.rows).toHaveLength(1)
+      expect(result.rows[0]).toMatchObject({ name: 'passphrase-test' })
+
+      await db.close()
+    })
+
+    it('data survives close and reopen with same passphrase', async () => {
+      const passphrase = 'my-reopen-test'
+      const db = await createPassphrasePGlite(testDir, passphrase)
+
+      await db.exec('CREATE TABLE reopen (id SERIAL PRIMARY KEY, data TEXT)')
+      await db.exec("INSERT INTO reopen (data) VALUES ('persisted')")
+      await db.close()
+
+      const db2 = await createPassphrasePGlite(testDir, passphrase)
+      const result = await db2.query('SELECT * FROM reopen')
+      expect(result.rows).toHaveLength(1)
+      expect(result.rows[0]).toMatchObject({ data: 'persisted' })
+
+      await db2.close()
+    })
+
+    it('rejects wrong passphrase on reopen', async () => {
+      const db = await createPassphrasePGlite(testDir, 'correct')
+      await db.close()
+
+      expect(() => new EncryptedFS(testDir, 'wrong')).toThrow(
+        /Invalid passphrase or corrupted encryption keys/,
+      )
     })
   })
 })

@@ -1,4 +1,4 @@
-export { EncryptedFS } from './encrypted-fs.js'
+export { EncryptedFS, type EncryptedFSOptions } from './encrypted-fs.js'
 
 export {
   PAGE_SIZE,

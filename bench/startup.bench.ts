@@ -1,7 +1,7 @@
 import { describe, bench } from 'vitest'
 import { PGlite } from '@electric-sql/pglite'
+import { EncryptedFS } from '../src/index.js'
 import { createTestDir, createEncryptedPGlite } from './helpers/bench-utils.js'
-import { reopenEncryptedPGlite } from '../test/helpers/test-utils.js'
 
 describe('fresh init', () => {
   bench(
@@ -28,7 +28,6 @@ describe('fresh init', () => {
 describe('reopen', () => {
   let plainDir: string
   let encDir: string
-  let encSalt: Buffer
 
   bench(
     'plain - reopen',
@@ -49,20 +48,11 @@ describe('reopen', () => {
     async () => {
       if (!encDir) {
         encDir = createTestDir()
-        const { salt } = await createEncryptedPGlite(encDir, 'bench-passphrase')
-        encSalt = salt
-        const { db } = await reopenEncryptedPGlite(
-          encDir,
-          encSalt,
-          'bench-passphrase',
-        )
+        const { db } = await createEncryptedPGlite(encDir, 'bench-passphrase')
         await db.close()
       }
-      const { db } = await reopenEncryptedPGlite(
-        encDir,
-        encSalt,
-        'bench-passphrase',
-      )
+      const encFs = new EncryptedFS(encDir, 'bench-passphrase')
+      const db = await PGlite.create({ dataDir: encDir, fs: encFs })
       await db.close()
     },
     { iterations: 3, warmupIterations: 1, time: 0 },

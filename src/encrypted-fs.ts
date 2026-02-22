@@ -18,6 +18,8 @@ import {
   type DerivedKeys,
   encryptPage,
   decryptPage,
+  deriveKeys,
+  randomSalt,
   VERIFICATION_MAGIC,
   VERIFICATION_FILE_ID,
 } from './crypto.js'
@@ -156,29 +158,42 @@ interface OpenFile {
   fileId: Buffer
 }
 
+export interface EncryptedFSOptions {
+  debug?: boolean
+}
+
 export class EncryptedFS extends BaseFilesystem {
-  private readonly keys: DerivedKeys
-  private readonly salt: Buffer
+  private readonly keys!: DerivedKeys
+  private readonly salt!: Buffer
   private openFiles: Map<number, OpenFile> = new Map()
   private cwd: string = '/'
   private nextFd: number = 100
 
   private destroyed = false
 
-  constructor(
-    dataDir: string,
-    keys: DerivedKeys,
-    salt: Buffer,
-    options?: { debug?: boolean },
-  ) {
+  constructor(dataDir: string, passphrase: string, options?: EncryptedFSOptions) {
     super(dataDir, options)
-    this.keys = keys
-    this.salt = salt
 
     const baseDir = this.dataDir ?? dataDir
     if (!fs.existsSync(baseDir)) {
       fs.mkdirSync(baseDir, { recursive: true })
     }
+
+    const tokenPath = path.join(baseDir, '.encryption-verify')
+    if (fs.existsSync(tokenPath)) {
+      const header = Buffer.alloc(SALT_SIZE)
+      const fd = fs.openSync(tokenPath, 'r')
+      try {
+        fs.readSync(fd, header, 0, SALT_SIZE, 0)
+      } finally {
+        fs.closeSync(fd)
+      }
+      this.salt = header
+    } else {
+      this.salt = randomSalt()
+    }
+
+    this.keys = deriveKeys(passphrase, this.salt)
 
     this.verifyOrCreateToken(baseDir)
 
@@ -211,17 +226,24 @@ export class EncryptedFS extends BaseFilesystem {
       const magic = Buffer.alloc(PAGE_SIZE)
       VERIFICATION_MAGIC.copy(magic)
       const encrypted = encryptPage(magic, 0, this.keys, VERIFICATION_FILE_ID)
-      fs.writeFileSync(tokenPath, encrypted)
+      fs.writeFileSync(tokenPath, Buffer.concat([this.salt, encrypted]))
       return
     }
 
     const data = fs.readFileSync(tokenPath)
-    if (data.length !== ENCRYPTED_PAGE_SIZE) {
+    if (data.length !== SALT_SIZE + ENCRYPTED_PAGE_SIZE) {
       throw new Error('Invalid passphrase or corrupted encryption keys')
     }
 
+    const encryptedPage = data.subarray(SALT_SIZE)
+
     try {
-      const decrypted = decryptPage(data, 0, this.keys, VERIFICATION_FILE_ID)
+      const decrypted = decryptPage(
+        encryptedPage,
+        0,
+        this.keys,
+        VERIFICATION_FILE_ID,
+      )
       if (
         !decrypted
           .subarray(0, VERIFICATION_MAGIC.length)

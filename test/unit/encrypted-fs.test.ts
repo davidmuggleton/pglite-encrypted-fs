@@ -8,8 +8,10 @@ import {
   createEncryptedFSWithSalt,
   getPhysicalSize,
 } from '../helpers/test-utils.js'
+import { EncryptedFS } from '../../src/index.js'
 import {
   PAGE_SIZE,
+  SALT_SIZE,
   FILE_HEADER_SIZE,
   ENCRYPTED_PAGE_SIZE,
 } from '../../src/crypto.js'
@@ -475,6 +477,15 @@ describe('EncryptedFS', () => {
       ).not.toThrow()
     })
 
+    it('stores salt in .encryption-verify file', () => {
+      const { fs: encFs, salt } = createEncryptedFS(testDir)
+      const tokenPath = path.join(testDir, '.encryption-verify')
+      const data = fs.readFileSync(tokenPath)
+
+      expect(data.length).toBe(SALT_SIZE + ENCRYPTED_PAGE_SIZE)
+      expect(data.subarray(0, SALT_SIZE).equals(salt)).toBe(true)
+    })
+
     it('detects corrupted partial page on read', () => {
       const { fs: encFs } = createEncryptedFS(testDir)
       const testPath = '/corrupt-partial'
@@ -493,6 +504,71 @@ describe('EncryptedFS', () => {
         encFs.read(fd2, buf, 0, PAGE_SIZE, 0)
       }).toThrow()
       encFs.close(fd2)
+    })
+  })
+
+  describe('passphrase constructor', () => {
+    it('creates EncryptedFS with just a passphrase', () => {
+      const encFs = new EncryptedFS(testDir, 'test-passphrase')
+      const testPath = '/testfile'
+
+      const fd = encFs.open(testPath, 'w')
+      const data = Buffer.from('hello passphrase mode')
+      encFs.write(fd, data, 0, data.length, 0)
+      encFs.close(fd)
+
+      const fd2 = encFs.open(testPath, 'r')
+      const readBuf = new Uint8Array(data.length)
+      const bytesRead = encFs.read(fd2, readBuf, 0, data.length, 0)
+      encFs.close(fd2)
+
+      expect(bytesRead).toBe(data.length)
+      expect(Buffer.from(readBuf).toString()).toBe('hello passphrase mode')
+    })
+
+    it('reopens with same passphrase and reads data', () => {
+      const encFs = new EncryptedFS(testDir, 'my-password')
+
+      const fd = encFs.open('/persist', 'w')
+      const data = Buffer.from('survives reopen')
+      encFs.write(fd, data, 0, data.length, 0)
+      encFs.close(fd)
+
+      const encFs2 = new EncryptedFS(testDir, 'my-password')
+
+      const fd2 = encFs2.open('/persist', 'r')
+      const readBuf = new Uint8Array(data.length)
+      const bytesRead = encFs2.read(fd2, readBuf, 0, data.length, 0)
+      encFs2.close(fd2)
+
+      expect(bytesRead).toBe(data.length)
+      expect(Buffer.from(readBuf).toString()).toBe('survives reopen')
+    })
+
+    it('rejects wrong passphrase', () => {
+      new EncryptedFS(testDir, 'correct-password')
+
+      expect(() => new EncryptedFS(testDir, 'wrong-password')).toThrow(
+        /Invalid passphrase or corrupted encryption keys/,
+      )
+    })
+
+    it('advanced key/salt mode still works alongside passphrase mode', () => {
+      const { fs: encFs, salt } = createEncryptedFS(testDir, 'dual-test')
+
+      const fd = encFs.open('/dual', 'w')
+      const data = Buffer.from('advanced mode data')
+      encFs.write(fd, data, 0, data.length, 0)
+      encFs.close(fd)
+
+      const { fs: encFs2 } = createEncryptedFSWithSalt(testDir, salt, 'dual-test')
+
+      const fd2 = encFs2.open('/dual', 'r')
+      const readBuf = new Uint8Array(data.length)
+      encFs2.read(fd2, readBuf, 0, data.length, 0)
+      encFs2.close(fd2)
+
+      expect(Buffer.from(readBuf).toString()).toBe('advanced mode data')
     })
   })
 })
