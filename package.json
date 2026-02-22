@@ -1,0 +1,68 @@
+{
+  "name": "pglite-encrypted-fs",
+  "version": "0.1.0",
+  "description": "Encrypted filesystem for PGlite — AES-256-GCM page-level encryption for PostgreSQL databases",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"src/**/*.{ts,js}\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "bench": "vitest bench --config vitest.bench.config.ts",
+    "prepublishOnly": "pnpm run typecheck && pnpm run lint && pnpm run build"
+  },
+  "keywords": [
+    "pglite",
+    "postgresql",
+    "postgres",
+    "encryption",
+    "aes-256-gcm",
+    "encrypted-filesystem",
+    "filesystem",
+    "wasm"
+  ],
+  "author": "David Muggleton <david@davidmuggleton.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/davidmuggleton/pglite-encrypted-fs.git"
+  },
+  "bugs": {
+    "url": "https://github.com/davidmuggleton/pglite-encrypted-fs/issues"
+  },
+  "homepage": "https://github.com/davidmuggleton/pglite-encrypted-fs#readme",
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=9"
+  },
+  "packageManager": "pnpm@10.12.3",
+  "peerDependencies": {
+    "@electric-sql/pglite": "^0.3.14"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.3.15",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^25.3.0",
+    "eslint": "^10.0.1",
+    "prettier": "^3.8.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.56.0",
+    "vitest": "^4.0.18"
+  }
+}
